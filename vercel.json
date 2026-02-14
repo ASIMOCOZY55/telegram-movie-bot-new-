@@ -4,10 +4,8 @@
           "src": "index.py",
           "use": "@vercel/python",
           "config": {
-            "maxLambdaSize": "15mb",
-            "runtime": "python3.9",
-            "memory": 1024,        <-- MOVED HERE
-            "maxDuration": 10      <-- MOVED HERE
+            "memory": 1024,
+            "maxDuration": 10
           }
         }
       ],
@@ -18,5 +16,4 @@
         }
       ],
       "installCommand": "pip install -r requirements.txt"
-      // REMOVED THE "functions" BLOCK FROM HERE
     }

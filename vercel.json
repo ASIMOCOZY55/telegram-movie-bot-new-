@@ -1,10 +1,9 @@
-    {
+k    {
       "builds": [
         {
           "src": "index.py",
           "use": "@vercel/python",
           "config": {
-            "memory": 1024,
             "maxDuration": 10
           }
         }

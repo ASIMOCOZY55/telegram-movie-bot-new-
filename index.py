@@ -1,8 +1,8 @@
-    import os
-    import logging
-    from flask import Flask, request, jsonify
-    from telegram import Update
-    from telegram.ext import Application, CommandHandler, MessageHandler, filters, PicklePersistence
+import os
+import logging
+from flask import Flask, request, jsonify
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, PicklePersistence
 
     # Enable logging
     logging.basicConfig(

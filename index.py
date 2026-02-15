@@ -20,7 +20,7 @@ async def start_command(update: Update, context):
     user = update.effective_user
     await update.message.reply_html(
         f"Hi {user.mention_html()}! I'm your movie bot. Send me a movie name, and I'll see what I can find!",
-        parse_mode=ParseMode.HTML # Explicitly set parse_mode
+        parse_mode=ParseMode.HTML
     )
     logger.info(f"User {user.full_name} ({user.id}) started the bot.")
 
@@ -46,19 +46,21 @@ async def error_handler(update: Update, context):
 # --- Initialize Flask App ---
 app = Flask(__name__)
 
-# Global Application instance
-application = None
+# --- Vercel Serverless Function Entry Point ---
+@app.route('/', methods=['GET', 'POST'])
+async def telegram_webhook():
+    if request.method == 'GET':
+        logger.info("Received GET request at root.")
+        return "Hello from your Telegram Movie Bot on Vercel! (Server is running.)"
 
-# This function will now be called within the webhook handler
-# to ensure the Application is ready for each request if not already.
-def get_bot_application():
-    global application
-    if application is None:
-        if not TOKEN:
-            logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
-            raise ValueError("BOT_TOKEN is not configured.")
+    logger.info("Received POST request at root (potential Telegram webhook).")
 
-        # Build the Application instance
+    if not TOKEN:
+        logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
+        return jsonify({'status': 'error', 'message': 'BOT_TOKEN not configured'}), 500
+
+    try:
+        # Build the Application instance for each request in webhook mode
         application = Application.builder().token(TOKEN).build()
 
         # Add all your handlers here
@@ -67,32 +69,15 @@ def get_bot_application():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_search))
         application.add_error_handler(error_handler)
 
-        logger.info("Telegram Application instance created and handlers added.")
-    return application
+        logger.info("Telegram Application instance created and handlers added for this request.")
 
-# This is the main entry point for your Vercel serverless function.
-@app.route('/', methods=['GET', 'POST'])
-async def telegram_webhook():
-    if request.method == 'GET':
-        logger.info("Received GET request at root.")
-        return "Hello from your Telegram Movie Bot on Vercel! (Server is running.)"
+        # Process the incoming webhook update using run_webhook
+        await application.process_update(
+            Update.de_json(request.get_json(force=True), application.bot)
+        )
 
-    logger.info("Received POST request at root (potential Telegram webhook).")
-    # Get or create the bot application instance
-    bot_app = get_bot_application()
-
-    try:
-        # Before processing, we need to ensure the application is initialized for webhook mode.
-        # This is the crucial part for serverless environments with PTB v20.x
-        update = Update.de_json(request.get_json(force=True), bot_app.bot)
-        # CORRECTED LINE: Process a single update
-        await bot_app.process_update(update) # Process one update
         logger.info(f"Successfully processed an update.")
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
         logger.exception("Error processing Telegram update")
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-# To satisfy Vercel, which expects 'app' to be callable
-# (though the async function is also handled by Flask's async support)
-# This part is mostly for Vercel's initial static analysis.

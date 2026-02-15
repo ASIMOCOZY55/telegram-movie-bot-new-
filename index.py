@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram.constants import ParseMode
+import asyncio # Import asyncio
 
 # Enable logging to see what's happening
 logging.basicConfig(
@@ -43,6 +44,26 @@ async def error_handler(update: Update, context):
     if update.effective_message:
         await update.effective_message.reply_text("Oops! Something went wrong. I'm telling my developer!")
 
+# --- Global Application instance to avoid re-initializing on every request IF possible ---
+# This approach tries to reuse the application instance but ensures it's initialized correctly.
+_application_instance = None
+
+def get_application():
+    global _application_instance
+    if _application_instance is None:
+        if not TOKEN:
+            logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
+            raise ValueError("BOT_TOKEN is not configured.")
+
+        _application_instance = Application.builder().token(TOKEN).build()
+        _application_instance.add_handler(CommandHandler("start", start_command))
+        _application_instance.add_handler(CommandHandler("help", help_command))
+        _application_instance.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_search))
+        _application_instance.add_error_handler(error_handler)
+        logger.info("Telegram Application instance created and handlers added.")
+
+    return _application_instance
+
 # --- Initialize Flask App ---
 app = Flask(__name__)
 
@@ -55,26 +76,16 @@ async def telegram_webhook():
 
     logger.info("Received POST request at root (potential Telegram webhook).")
 
-    if not TOKEN:
-        logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
-        return jsonify({'status': 'error', 'message': 'BOT_TOKEN not configured'}), 500
-
     try:
-        # Build the Application instance for each request in webhook mode
-        application = Application.builder().token(TOKEN).build()
+        application = get_application() # Get the pre-configured application instance
 
-        # Add all your handlers here
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_search))
-        application.add_error_handler(error_handler)
-
-        logger.info("Telegram Application instance created and handlers added for this request.")
-
-        # Process the incoming webhook update using run_webhook
-        await application.process_update(
-            Update.de_json(request.get_json(force=True), application.bot)
-        )
+        # Run the application's webhook processing logic
+        # This calls `initialize()` and `process_update()` correctly.
+        await application.update_queue.put(Update.de_json(request.get_json(force=True), application.bot))
+        async with application: # Ensures context is entered and exited correctly
+            await application.start() # This effectively initializes the application for the webhook
+            await application.process_updates(application.update_queue.get(timeout=1))
+            await application.stop()
 
         logger.info(f"Successfully processed an update.")
         return jsonify({'status': 'ok'}), 200

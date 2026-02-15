@@ -1,11 +1,12 @@
 {
-  "version": 2,
   "builds": [
     {
       "src": "index.py",
       "use": "@vercel/python",
       "config": {
-        "maxDuration": 10
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.9",
+        "pipInstall": true
       }
     }
   ],
@@ -15,5 +16,11 @@
       "dest": "index.py"
     }
   ],
-  "installCommand": "pip install -r requirements.txt"
+  "installCommand": "pip install -r requirements.txt",
+  "functions": {
+    "index.py": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  }
 }

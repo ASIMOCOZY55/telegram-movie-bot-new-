@@ -84,9 +84,9 @@ async def telegram_webhook():
     try:
         # Before processing, we need to ensure the application is initialized for webhook mode.
         # This is the crucial part for serverless environments with PTB v20.x
-        await bot_app.update_queue.put(Update.de_json(request.get_json(force=True), bot_app.bot))
-        # We explicitly run `process_update` for the single update
-        await bot_app.process_updates(bot_app.update_queue.get(timeout=1)) # Process one update
+        update = Update.de_json(request.get_json(force=True), bot_app.bot)
+        # CORRECTED LINE: Process a single update
+        await bot_app.process_update(update) # Process one update
         logger.info(f"Successfully processed an update.")
         return jsonify({'status': 'ok'}), 200
     except Exception as e:

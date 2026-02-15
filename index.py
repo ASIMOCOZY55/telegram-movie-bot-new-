@@ -8,12 +8,12 @@ from telegram.ext import CommandHandler, MessageHandler, Filters, CallbackQueryH
 from scraper import search_movies, get_movie
 
 # --- Configuration ---
+# Forcing a rebuild
 # Use environment variables for sensitive info and dynamic URLs
 TOKEN = os.environ.get("BOT_TOKEN")
 # VERCEL_URL is a system environment variable provided by Vercel for the deployment URL
 # It includes the protocol (https://) and domain.
 URL = os.environ.get("VERCEL_URL")
-
 # --- Flask App Initialization ---
 # This needs to be a global instance for Vercel to find it as the entry point
 app = Flask(__name__)

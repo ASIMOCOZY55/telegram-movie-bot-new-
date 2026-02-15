@@ -1,18 +1,19 @@
+{
+  "version": 2,
+  "builds": [
     {
-      "builds": [
-        {
-          "src": "index.py",
-          "use": "@vercel/python",
-          "config": {
-            "maxDuration": 10
-          }
-        }
-      ],
-      "routes": [
-        {
-          "src": "/(.*)",
-          "dest": "index.py"
-        }
-      ],
-      "installCommand": "pip install -r requirements.txt"
+      "src": "index.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxDuration": 10
+      }
     }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "index.py"
+    }
+  ],
+  "installCommand": "pip install -r requirements.txt"
+}

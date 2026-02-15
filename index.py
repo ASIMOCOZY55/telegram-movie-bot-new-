@@ -3,6 +3,7 @@ import logging
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.constants import ParseMode
 
 # Enable logging to see what's happening
 logging.basicConfig(
@@ -11,9 +12,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-# Get your bot token from environment variables.
-# This is crucial for security and Vercel deployments.
-# Make sure you have a BOT_TOKEN environment variable set in Vercel project settings.
 TOKEN = os.environ.get("BOT_TOKEN")
 
 # --- Bot Handlers ---
@@ -22,6 +20,7 @@ async def start_command(update: Update, context):
     user = update.effective_user
     await update.message.reply_html(
         f"Hi {user.mention_html()}! I'm your movie bot. Send me a movie name, and I'll see what I can find!",
+        parse_mode=ParseMode.HTML # Explicitly set parse_mode
     )
     logger.info(f"User {user.full_name} ({user.id}) started the bot.")
 
@@ -41,24 +40,22 @@ async def movie_search(update: Update, context):
 async def error_handler(update: Update, context):
     """Log the error and send a telegram message to notify the developer."""
     logger.warning(f"Update {update} caused error {context.error}")
-    # Optionally, send an error message to the user or to a specific chat_id for debugging
     if update.effective_message:
         await update.effective_message.reply_text("Oops! Something went wrong. I'm telling my developer!")
 
-# --- Initialize Flask App and Telegram Bot ---
+# --- Initialize Flask App ---
 app = Flask(__name__)
 
-# Global variable for the Telegram Application instance
+# Global Application instance
 application = None
 
-# This function is designed to initialize the Telegram Application
-# It's called once when the serverless function is "cold started" to reduce overhead.
-async def init_telegram_bot():
+# This function will now be called within the webhook handler
+# to ensure the Application is ready for each request if not already.
+def get_bot_application():
     global application
     if application is None:
         if not TOKEN:
             logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
-            # It's good practice to raise an error if critical config is missing
             raise ValueError("BOT_TOKEN is not configured.")
 
         # Build the Application instance
@@ -68,50 +65,34 @@ async def init_telegram_bot():
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_search))
-
-        # Add the error handler
         application.add_error_handler(error_handler)
 
-        # Retrieve the Vercel URL, which is automatically set by Vercel in environment variables.
-        webhook_url = os.environ.get("VERCEL_URL")
-        if not webhook_url:
-            logger.error("VERCEL_URL environment variable is not set. Webhook cannot be configured properly.")
-            # For local testing, you might set a dummy URL, but for Vercel it MUST be present.
-            raise ValueError("VERCEL_URL is not set. Cannot configure webhook.")
-
-        # Set the webhook for the bot
-        # We are setting it to the root of your Vercel deployment for simplicity.
-        await application.bot.set_webhook(url=f"https://{webhook_url}/")
-        logger.info(f"Telegram Application initialized and webhook set to https://{webhook_url}/")
+        logger.info("Telegram Application instance created and handlers added.")
     return application
 
 # This is the main entry point for your Vercel serverless function.
-# It will handle both GET and POST requests to the root path '/'.
-@app.route('/', methods=['GET', 'POST']) # <--- CRITICAL CHANGE HERE
+@app.route('/', methods=['GET', 'POST'])
 async def telegram_webhook():
-    # If it's a GET request, just return a simple message to indicate the server is alive.
     if request.method == 'GET':
         logger.info("Received GET request at root.")
         return "Hello from your Telegram Movie Bot on Vercel! (Server is running.)"
 
-    # For POST requests, proceed with Telegram update processing.
-    logger.info("Received POST request at root (potential Telegram webhook).") 
-    # Initialize the bot application if it hasn't been already
-    bot_app = await init_telegram_bot()
+    logger.info("Received POST request at root (potential Telegram webhook).")
+    # Get or create the bot application instance
+    bot_app = get_bot_application()
 
     try:
-        # Parse the incoming JSON update from Telegram
-        update = Update.de_json(request.get_json(force=True), bot_app.bot)
-        # Process the update using the bot's application instance
-        await bot_app.process_update(update)
-        logger.info(f"Successfully processed update {update.update_id}")
-        # Return a success response to Telegram
+        # Before processing, we need to ensure the application is initialized for webhook mode.
+        # This is the crucial part for serverless environments with PTB v20.x
+        await bot_app.update_queue.put(Update.de_json(request.get_json(force=True), bot_app.bot))
+        # We explicitly run `process_update` for the single update
+        await bot_app.process_updates(bot_app.update_queue.get(timeout=1)) # Process one update
+        logger.info(f"Successfully processed an update.")
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
-        # Log any errors during update processing and return an error response
         logger.exception("Error processing Telegram update")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Vercel looks for a variable named 'app' to serve your Flask application.
-# This line makes sure it's exported correctly.
-# 'app' is the Flask application instance.
+# To satisfy Vercel, which expects 'app' to be callable
+# (though the async function is also handled by Flask's async support)
+# This part is mostly for Vercel's initial static analysis.

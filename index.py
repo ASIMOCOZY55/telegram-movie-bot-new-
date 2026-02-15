@@ -1,93 +1,100 @@
 import os
-import logging
+from io import BytesIO
+import requests
 from flask import Flask, request, jsonify
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from telegram.constants import ParseMode # Still useful for other parse_mode settings, but not for reply_html directly
-
-# Enable logging to see what's happening
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, MessageHandler, Filters, CallbackQueryHandler, Dispatcher
+# Assuming scraper.py exists in the same directory and has these functions
+from scraper import search_movies, get_movie
 
 # --- Configuration ---
+# Use environment variables for sensitive info and dynamic URLs
 TOKEN = os.environ.get("BOT_TOKEN")
+# VERCEL_URL is a system environment variable provided by Vercel for the deployment URL
+# It includes the protocol (https://) and domain.
+URL = os.environ.get("VERCEL_URL")
 
-# --- Bot Handlers ---
-async def start_command(update: Update, context):
-    """Send a message when the command /start is issued."""
-    user = update.effective_user
-    # Removed parse_mode=ParseMode.HTML as reply_html implies it
-    await update.message.reply_html(
-        f"Hi {user.mention_html()}! I'm your movie bot. Send me a movie name, and I'll see what I can find!"
-    )
-    logger.info(f"User {user.full_name} ({user.id}) started the bot.")
-
-async def help_command(update: Update, context):
-    """Send a message when the command /help is issued."""
-    await update.message.reply_text("Send me a movie title and I'll try to find it for you!")
-    logger.info(f"User {update.effective_user.full_name} requested help.")
-
-async def movie_search(update: Update, context):
-    """Echo the user message (placeholder for actual movie search)."""
-    movie_title = update.message.text
-    await update.message.reply_text(
-        f"Searching for '{movie_title}'... (This feature is still under development, macha!)"
-    )
-    logger.info(f"User {update.effective_user.full_name} requested movie: {movie_title}")
-
-async def error_handler(update: Update, context):
-    """Log the error and send a telegram message to notify the developer."""
-    logger.warning(f"Update {update} caused error {context.error}")
-    if update.effective_message:
-        await update.effective_message.reply_text("Oops! Something went wrong. I'm telling my developer!")
-
-# --- Global Application instance to be built once ---
-_application_instance = None
-
-def get_application():
-    global _application_instance
-    if _application_instance is None:
-        if not TOKEN:
-            logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
-            raise ValueError("BOT_TOKEN is not configured.")
-
-        # Build the Application instance
-        _application_instance = Application.builder().token(TOKEN).build()
-
-        # Add all your handlers here
-        _application_instance.add_handler(CommandHandler("start", start_command))
-        _application_instance.add_handler(CommandHandler("help", help_command))
-        _application_instance.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_search))
-        _application_instance.add_error_handler(error_handler)
-        logger.info("Telegram Application instance created and handlers added.")
-
-    return _application_instance
-
-# --- Initialize Flask App ---
+# --- Flask App Initialization ---
+# This needs to be a global instance for Vercel to find it as the entry point
 app = Flask(__name__)
 
-# --- Vercel Serverless Function Entry Point ---
-@app.route('/', methods=['GET', 'POST'])
-async def telegram_webhook():
-    if request.method == 'GET':
-        logger.info("Received GET request at root.")
-        return "Hello from your Telegram Movie Bot on Vercel! (Server is running.)"
+# --- Bot functions ---
+def welcome(update, context) -> None:
+    update.message.reply_text(f"Hello Dear, Welcome to Project - Name.\n"
+                              f"🔥 Download Your Favourite Movies, Webseries & TV-Shows For 💯 Free And 🍿 Enjoy it.")
+    update.message.reply_text("👇 Enter Keyword Below 👇")
 
-    logger.info("Received POST request at root (potential Telegram webhook).")
+def find_movie(update, context):
+    search_results = update.message.reply_text("Processing")
+    query = update.message.text
+    movies_list = search_movies(query) # This relies on your scraper.py
+    if movies_list:
+        keyboards = []
+        for movie in movies_list:
+            keyboard = InlineKeyboardButton(movie["title"], callback_data=movie["id"])
+            keyboards.append([keyboard])
+        reply_markup = InlineKeyboardMarkup(keyboards)
+        search_results.edit_text('Results', reply_markup=reply_markup)
+    else:
+        search_results.edit_text('Sorry 🙏, No result found!\nPlease retry Or contact admin.')
 
-    try:
-        application = get_application() # Get the pre-configured application instance
+def movie_result(update, context) -> None:
+    query = update.callback_query
+    s = get_movie(query.data) # This relies on your scraper.py
+    response = requests.get(s["img"])
+    img = BytesIO(response.content)
+    query.message.reply_photo(photo=img, caption=f"🎥 {s['title']}")
+    link = ""
+    links = s["links"]
+    for i in links:
+        link += "🎬" + i + "\n" + links[i] + "\n\n"
+    caption = f"Direct Download Links:\n\n{link}"
+    if len(caption) > 4095:
+        # Telegram message size limit workaround
+        for x in range(0, len(caption), 4095):
+            query.message.reply_text(text=caption[x:x+4095])
+    else:
+        query.message.reply_text(text=caption)
 
-        # This is the single, correct way to process a webhook update for PTB v20.x in serverless.
-        # It handles initialization, processing, and shutdown internally for this single update.
-        await application.process_webhook_update(
-            Update.de_json(request.get_json(force=True), application.bot)
-        )
+# --- Dispatcher setup function ---
+# This will be called on each incoming request
+def setup_dispatcher():
+    # Instantiate Bot inside the function for serverless context
+    current_bot = Bot(TOKEN)
+    update_queue = Queue() # Queue might not be needed for webhook-only setup
+    dispatcher = Dispatcher(current_bot, update_queue, use_context=True)
 
-        logger.info(f"Successfully processed an update.")
-        return jsonify({'status': 'ok'}), 200
-    except Exception as e:
-        logger.exception("Error processing Telegram update")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    dispatcher.add_handler(CommandHandler('start', welcome))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, find_movie)) # ~Filters.command to not conflict with /start
+    dispatcher.add_handler(CallbackQueryHandler(movie_result))
+    return dispatcher
+
+# --- Flask Routes ---
+@app.route('/')
+def home():
+    # Simple check for the root URL
+    return 'Hello World from your Telegram Movie Bot on Vercel!'
+
+@app.route(f'/{TOKEN}', methods=['POST']) # Use f-string for clarity, only POST for webhook
+def webhook():
+    if request.method == "POST":
+        # Process the Telegram update
+        dispatcher = setup_dispatcher()
+        update = Update.de_json(request.get_json(force=True), dispatcher.bot)
+        dispatcher.process_update(update)
+        return jsonify({'status': 'ok'})
+    return jsonify({'status': 'method not allowed'}), 405
+
+@app.route('/setwebhook', methods=['GET']) # Changed to GET, as it's usually for setup
+def set_webhook_route():
+    if not TOKEN or not URL:
+        return "Error: BOT_TOKEN or VERCEL_URL environment variables not set.", 500
+
+    webhook_url = f"{URL}/{TOKEN}" # Correctly form the webhook URL
+    current_bot = Bot(TOKEN) # Instantiate bot for this call
+
+    s = current_bot.setWebhook(webhook_url)
+    if s:
+        return f"Webhook set to: {webhook_url}"
+    else:
+        return f"Webhook setup failed for: {webhook_url}"

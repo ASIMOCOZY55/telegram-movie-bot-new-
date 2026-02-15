@@ -3,8 +3,7 @@ import logging
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from telegram.constants import ParseMode
-import asyncio # Import asyncio
+from telegram.constants import ParseMode # Still useful for other parse_mode settings, but not for reply_html directly
 
 # Enable logging to see what's happening
 logging.basicConfig(
@@ -19,9 +18,9 @@ TOKEN = os.environ.get("BOT_TOKEN")
 async def start_command(update: Update, context):
     """Send a message when the command /start is issued."""
     user = update.effective_user
+    # Removed parse_mode=ParseMode.HTML as reply_html implies it
     await update.message.reply_html(
-        f"Hi {user.mention_html()}! I'm your movie bot. Send me a movie name, and I'll see what I can find!",
-        parse_mode=ParseMode.HTML
+        f"Hi {user.mention_html()}! I'm your movie bot. Send me a movie name, and I'll see what I can find!"
     )
     logger.info(f"User {user.full_name} ({user.id}) started the bot.")
 
@@ -44,8 +43,7 @@ async def error_handler(update: Update, context):
     if update.effective_message:
         await update.effective_message.reply_text("Oops! Something went wrong. I'm telling my developer!")
 
-# --- Global Application instance to avoid re-initializing on every request IF possible ---
-# This approach tries to reuse the application instance but ensures it's initialized correctly.
+# --- Global Application instance to be built once ---
 _application_instance = None
 
 def get_application():
@@ -55,7 +53,10 @@ def get_application():
             logger.error("BOT_TOKEN is not set. Please configure it in Vercel environment variables.")
             raise ValueError("BOT_TOKEN is not configured.")
 
+        # Build the Application instance
         _application_instance = Application.builder().token(TOKEN).build()
+
+        # Add all your handlers here
         _application_instance.add_handler(CommandHandler("start", start_command))
         _application_instance.add_handler(CommandHandler("help", help_command))
         _application_instance.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_search))
@@ -79,13 +80,11 @@ async def telegram_webhook():
     try:
         application = get_application() # Get the pre-configured application instance
 
-        # Run the application's webhook processing logic
-        # This calls `initialize()` and `process_update()` correctly.
-        await application.update_queue.put(Update.de_json(request.get_json(force=True), application.bot))
-        async with application: # Ensures context is entered and exited correctly
-            await application.start() # This effectively initializes the application for the webhook
-            await application.process_updates(application.update_queue.get(timeout=1))
-            await application.stop()
+        # This is the single, correct way to process a webhook update for PTB v20.x in serverless.
+        # It handles initialization, processing, and shutdown internally for this single update.
+        await application.process_webhook_update(
+            Update.de_json(request.get_json(force=True), application.bot)
+        )
 
         logger.info(f"Successfully processed an update.")
         return jsonify({'status': 'ok'}), 200
